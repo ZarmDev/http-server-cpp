@@ -8,6 +8,9 @@
 #include <arpa/inet.h>
 #include <netdb.h>
 
+// 1. run ip address (result)
+// 2. type: "result:4221" in your browser
+
 int main(int argc, char **argv) {
   // Flush after every std::cout / std::cerr
   std::cout << std::unitbuf;
@@ -17,7 +20,10 @@ int main(int argc, char **argv) {
   std::cout << "Logs from your program will appear here!\n";
 
   // Uncomment this block to pass the first stage
-  //
+  // int socket(int domain, int type, int protocol);
+  // SOCK_DGRAM - Doesn't require connection to be established, no guarentee for delivery/order/error checking, fixed size. Suitable for zoom meetings, real-time applications, games.
+  // SOCK_STREAM - Provides reliable, sequenced packets and error checked packets. It is suitable for applications where data integrity and order are critical, such as HTTP, FTP, and SSH.
+  // SOCK_SEQPACKET - Same as SOCK_STREAM but tells you when messages start and end instead of just sending and sending data in one stream. (Maybe?)
   int server_fd = socket(AF_INET, SOCK_STREAM, 0);
   if (server_fd < 0) {
    std::cerr << "Failed to create server socket\n";
@@ -53,8 +59,16 @@ int main(int argc, char **argv) {
 
   std::cout << "Waiting for a client to connect...\n";
 
-  accept(server_fd, (struct sockaddr *) &client_addr, (socklen_t *) &client_addr_len);
+  int client_fd = accept(server_fd, (struct sockaddr *) &client_addr, (socklen_t *) &client_addr_len);
   std::cout << "Client connected\n";
+
+  const char *response = "HTTP/1.1 200 OK\r\n\r\n";
+
+  // send(sockfd, buf, len, flags);
+  // buf is the response
+  // len is in bytes
+  // flags is ???
+  send(client_fd, response, strlen(response), 0);
 
   close(server_fd);
 
