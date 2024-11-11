@@ -83,7 +83,7 @@ int main(int argc, char **argv) {
       url += buffer[i];
     }
   }
-  cout << '\n' << url;
+  cout << '\n' << url.substr(0, 4);
   if (url == "/") {
     // cout << "test";
     const char *response = "HTTP/1.1 200 OK\r\n\r\n";
@@ -93,6 +93,11 @@ int main(int argc, char **argv) {
     // len is in bytes
     // flags is ???
     send(client_fd, response, strlen(response), 0);
+  } if (url.substr(0, 5) == "/echo") {
+    string query = url.substr(6, url.length());
+    int contentlength = query.length();
+    string response = "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: " + to_string(contentlength) + "\r\n\r\n" + query;
+    send(client_fd, response.c_str(), response.length(), 0);
   } else {
       const char *response = "HTTP/1.1 404 Not Found\r\n\r\n";
 
