@@ -10,6 +10,7 @@
 
 // 1. run ip address (result)
 // 2. type: "result:4221" in your browser
+using namespace std;
 
 int main(int argc, char **argv) {
   // Flush after every std::cout / std::cerr
@@ -50,7 +51,7 @@ int main(int argc, char **argv) {
 
   int connection_backlog = 5;
   if (listen(server_fd, connection_backlog) != 0) {
-    std::cerr << "listen failed\n";
+    cerr << "listen failed\n";
     return 1;
   }
 
@@ -62,13 +63,47 @@ int main(int argc, char **argv) {
   int client_fd = accept(server_fd, (struct sockaddr *) &client_addr, (socklen_t *) &client_addr_len);
   std::cout << "Client connected\n";
 
-  const char *response = "HTTP/1.1 200 OK\r\n\r\n";
+  // Setup a buffer with any amount of characters for now...
+  char buffer[4000];
+  // https://www.bogotobogo.com/cplusplus/sockets_server_client.php
+  // Reads the value from the client and returns the length of the response
+  auto n = read(client_fd, buffer,255);
+  if (n < 0) cout << ("ERROR reading from socket");
+  printf("Here is the message: %s\n",buffer);
 
-  // send(sockfd, buf, len, flags);
-  // buf is the response
-  // len is in bytes
-  // flags is ???
-  send(client_fd, response, strlen(response), 0);
+  string url = "";
+  bool isURL = false;
+  for (int i = 0; i < n; i++) {
+    // cout << buffer[i];
+    if (isURL && buffer[i] == ' ') {
+      break;
+    } else if (buffer[i] == ' ') {
+      isURL = true;
+    } else if (isURL == true) {
+      url += buffer[i];
+    }
+  }
+  cout << '\n' << url;
+  if (url == "/") {
+    // cout << "test";
+    const char *response = "HTTP/1.1 200 OK\r\n\r\n";
+
+    // send(sockfd, buf, len, flags);
+    // buf is the response
+    // len is in bytes
+    // flags is ???
+    send(client_fd, response, strlen(response), 0);
+  } else {
+      const char *response = "HTTP/1.1 404 Not Found\r\n\r\n";
+
+      // send(sockfd, buf, len, flags);
+      // buf is the response
+      // len is in bytes
+      // flags is ???
+      send(client_fd, response, strlen(response), 0);
+
+
+  }
 
   close(server_fd);
 
