@@ -11,6 +11,7 @@
 #include <vector>
 #include <unordered_map>
 #include <utility>
+#include <thread>
 
 // 1. run ip address (result)
 // 2. type: "result:4221" in your browser
@@ -47,6 +48,137 @@ void fw(string location, string content) {
     } else {
         std::cerr << "Unable to open file"; // Error handling
     }
+}
+
+// I saw an example on Codecrafters doing it this way and I have to say they did a good job
+void handleClient(int client_fd) {
+  int maximumCharacters = 1024;
+    // Setup a buffer with any amount of characters for now...
+    char buffer[maximumCharacters]; 
+
+    // https://www.bogotobogo.com/cplusplus/sockets_server_client.php
+    // Reads the value from the client and returns the length of the response
+    int n = read(client_fd, buffer,255);
+    if (n < 0) cout << ("ERROR reading from socket");
+    //printf("Here is the message: %s\n",buffer);
+    // Artificially add \n to ensure that all data is pushed to the map below
+    strcat(buffer, "\n");
+    
+    string curr; 
+    string requestType;
+    string url;
+    string protocol;
+    // Unfortunately it says that headers are NOT always in the same order, so we have to use a map for each header
+    // According to AI, you should use a unordered map...
+    unordered_map<string, string> headers;
+    vector<string> lines = {};
+    enum STATE {
+        TYPE,
+        URL,
+        PROTO,
+        FIRST,
+        SECOND
+    };
+    enum STATE state = STATE::TYPE;
+    pair<string, string> headerData;
+    // Loop through each character in the char* array until the null byte
+    for (int i = 0; buffer[i] != '\0'; ++i) {
+        char c = buffer[i];
+        // cout << c << " state is: " << state << '\n'
+        if (state == STATE::TYPE) {
+            if (c == ' ') {
+                cout << curr << '\n';
+                requestType = curr;
+                curr = "";
+                state = STATE::URL;
+            } else {
+                curr += c;
+            }
+        } else if (state == STATE::URL) {
+            if (c == ' ') {
+                cout << curr << '\n';
+                url = curr;
+                curr = "";
+                state = STATE::PROTO;
+            } else {
+                curr += c;
+            }
+        } else if (state == STATE::PROTO) {
+            if (c == ' ') {
+                cout << curr << '\n';
+                protocol = curr;
+                curr = "";
+                i += 3;
+                state = STATE::FIRST;
+            } else {
+                curr += c;
+            }
+        } else if (state == STATE::FIRST) {
+          if (c == ':') {
+              headerData.first = curr;
+              curr = "";
+              state = STATE::SECOND;
+              i++;
+          } else {
+              curr += c;
+          }
+        } else if (state == STATE::SECOND) {
+          if (c == '\r') {
+            headerData.second = curr;
+            headers.insert(headerData);
+            curr = "";
+            state = STATE::FIRST;
+            i++;
+          } else {
+              curr += c;
+          }
+        }
+        //std::cout << buffer[i] << std::endl;
+    } 
+
+    string bufferStr(buffer);
+
+    cout << requestType << url << protocol << '\n';
+    for (const auto& pair : headers) {
+      std::cout << "[" << pair.first << "] = [" << pair.second << "]\n";
+    }
+    if (url == "/") {
+      const string body = "";
+      string response = "HTTP/1.1 200 OK\r\n";
+      response.append("Content-Type: text/plain\r\n");
+      response.append("Content-Length: " + to_string(body.length()) + "\r\n" + "\r\n");
+      response.append(body + "\r\n");
+      cout << response;
+      send(client_fd, response.c_str(), response.length(), 0);  
+    } else if (url == "/user-agent") {
+      const string body = headers["User-Agent"];
+      string response = "HTTP/1.1 200 OK\r\n";
+      response.append("Content-Type: text/plain\r\n");
+      response.append("Content-Length: " + to_string(body.length()) + "\r\n" + "\r\n");
+      response.append(body + "\r\n");
+      // send(sockfd, buf, len, flags);
+      // buf is the response
+      // len is in bytes
+      // flags is ???
+      cout << response;
+      send(client_fd, response.c_str(), response.length(), 0);
+    } else if (url.find("echo/") != std::string::npos) {
+      // To prevent substring error (which would crash the server)
+      if (url.length() > 5) {
+        const string body = url.substr(6);
+        string response = "HTTP/1.1 200 OK\r\n";
+        response.append("Content-Type: text/plain\r\n");
+        response.append("Content-Length: " + to_string(body.length()) + "\r\n" + "\r\n");
+        response.append(body + "\r\n");
+        cout << response;
+        send(client_fd, response.c_str(), response.length(), 0); 
+      }
+    } else {
+        const char *response = "HTTP/1.1 404 Not Found\r\n\r\n";
+        send(client_fd, response, strlen(response), 0);
+    }
+
+    fw("output.txt", bufferStr); 
 }
 
 int main(int argc, char **argv) {
@@ -96,136 +228,12 @@ int main(int argc, char **argv) {
 
   std::cout << "Waiting for a client to connect...\n";
 
-  int client_fd = accept(server_fd, (struct sockaddr *) &client_addr, (socklen_t *) &client_addr_len);
-  std::cout << "Client connected\n";
-  
-  int maximumCharacters = 1024;
-  // Setup a buffer with any amount of characters for now...
-  char buffer[maximumCharacters]; 
-
-  // https://www.bogotobogo.com/cplusplus/sockets_server_client.php
-  // Reads the value from the client and returns the length of the response
-  int n = read(client_fd, buffer,255);
-  if (n < 0) cout << ("ERROR reading from socket");
-  //printf("Here is the message: %s\n",buffer);
-  // Artificially add \n to ensure that all data is pushed to the map below
-  strcat(buffer, "\n");
-  
-  string curr; 
-  string requestType;
-  string url;
-  string protocol;
-  // Unfortunately it says that headers are NOT always in the same order, so we have to use a map for each header
-  // According to AI, you should use a unordered map...
-  unordered_map<string, string> headers;
-  vector<string> lines = {};
-  enum STATE {
-      TYPE,
-      URL,
-      PROTO,
-      FIRST,
-      SECOND
-  };
-  enum STATE state = STATE::TYPE;
-  pair<string, string> headerData;
-  // Loop through each character in the char* array until the null byte
-  for (int i = 0; buffer[i] != '\0'; ++i) {
-      char c = buffer[i];
-      // cout << c << " state is: " << state << '\n'
-      if (state == STATE::TYPE) {
-          if (c == ' ') {
-              cout << curr << '\n';
-              requestType = curr;
-              curr = "";
-              state = STATE::URL;
-          } else {
-              curr += c;
-          }
-      } else if (state == STATE::URL) {
-          if (c == ' ') {
-              cout << curr << '\n';
-              url = curr;
-              curr = "";
-              state = STATE::PROTO;
-          } else {
-              curr += c;
-          }
-      } else if (state == STATE::PROTO) {
-          if (c == ' ') {
-              cout << curr << '\n';
-              protocol = curr;
-              curr = "";
-              i += 3;
-              state = STATE::FIRST;
-          } else {
-              curr += c;
-          }
-      } else if (state == STATE::FIRST) {
-        if (c == ':') {
-            headerData.first = curr;
-            curr = "";
-            state = STATE::SECOND;
-            i++;
-        } else {
-            curr += c;
-        }
-      } else if (state == STATE::SECOND) {
-        if (c == '\r') {
-          headerData.second = curr;
-          headers.insert(headerData);
-          curr = "";
-          state = STATE::FIRST;
-          i++;
-        } else {
-            curr += c;
-        }
-      }
-      //std::cout << buffer[i] << std::endl;
-  } 
-
-  string bufferStr(buffer);
-
-  cout << requestType << url << protocol << '\n';
-  for (const auto& pair : headers) {
-    std::cout << "[" << pair.first << "] = [" << pair.second << "]\n";
+  while (true) {
+    int client_fd = accept(server_fd, (struct sockaddr *) &client_addr, (socklen_t *) &client_addr_len);
+    std::cout << "Client connected\n";
+    // Create a thread, to handle it and then just run it seperately so the program can continue accepting requests
+    thread(handleClient, client_fd).detach(); 
   }
-  if (url == "/") {
-    const string body = "";
-    string response = "HTTP/1.1 200 OK\r\n";
-    response.append("Content-Type: text/plain\r\n");
-    response.append("Content-Length: " + to_string(body.length()) + "\r\n" + "\r\n");
-    response.append(body + "\r\n");
-    cout << response;
-    send(client_fd, response.c_str(), response.length(), 0);  
-  } else if (url == "/user-agent") {
-    const string body = headers["User-Agent"];
-    string response = "HTTP/1.1 200 OK\r\n";
-    response.append("Content-Type: text/plain\r\n");
-    response.append("Content-Length: " + to_string(body.length()) + "\r\n" + "\r\n");
-    response.append(body + "\r\n");
-    // send(sockfd, buf, len, flags);
-    // buf is the response
-    // len is in bytes
-    // flags is ???
-    cout << response;
-    send(client_fd, response.c_str(), response.length(), 0);
-  } else if (url.find("echo/") != std::string::npos) {
-    // To prevent substring error (which would crash the server)
-    if (url.length() > 5) {
-      const string body = url.substr(6);
-      string response = "HTTP/1.1 200 OK\r\n";
-      response.append("Content-Type: text/plain\r\n");
-      response.append("Content-Length: " + to_string(body.length()) + "\r\n" + "\r\n");
-      response.append(body + "\r\n");
-      cout << response;
-      send(client_fd, response.c_str(), response.length(), 0); 
-    }
-  } else {
-      const char *response = "HTTP/1.1 404 Not Found\r\n\r\n";
-      send(client_fd, response, strlen(response), 0);
-  }
-
-  fw("output.txt", bufferStr);
   close(server_fd);
 
   return 0;
