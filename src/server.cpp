@@ -22,6 +22,9 @@
 using namespace std;
 using ResponseFunc = string (*)(const string &, const unordered_map<string, string> &, const string &);
 
+// Global variables
+string dir = "";
+
 // Extract the path from a request (example: localhost:4221/test) -> returns test
 char *getURLPath(char *buffer, int n)
 {
@@ -288,15 +291,15 @@ private:
 // Help of AI
 struct Response
 {
-  std::string status = "200 OK";
-  std::string contentType = "text/plain";
-  std::string body = "";
+  string status = "200 OK";
+  string contentType = "text/plain";
+  string body = "";
 
-  std::string toString() const
+  string toString() const
   {
-    std::string response = "HTTP/1.1 " + status + "\r\n";
+    string response = "HTTP/1.1 " + status + "\r\n";
     response += "Content-Type: " + contentType + "\r\n";
-    response += "Content-Length: " + std::to_string(body.length()) + "\r\n\r\n";
+    response += "Content-Length: " + to_string(body.length()) + "\r\n\r\n";
     response += body;
     return response;
   }
@@ -318,18 +321,18 @@ inline bool startsWith(const std::string &str, const std::string &prefix)
   return str.size() >= prefix.size() && str.compare(0, prefix.size(), prefix) == 0;
 }
 
-inline std::string readFile(const std::string& path)
+inline std::string readFile(const std::string &path)
 {
-    std::ifstream file(path, std::ios::binary);
-    if (!file.is_open()) return "";
-    std::ostringstream ss;
-    ss << file.rdbuf();
-    return ss.str();
+  std::ifstream file(path, std::ios::binary);
+  if (!file.is_open())
+    return "";
+  std::ostringstream ss;
+  ss << file.rdbuf();
+  return ss.str();
 }
 
 string handleResponse(const string &url, const unordered_map<string, string> &headers, const string &data)
 {
-  cout << url;
   if (url == "/")
   {
     const string body = "";
@@ -367,13 +370,20 @@ string handleResponse(const string &url, const unordered_map<string, string> &he
   }
   else if (startsWith(url, "/files"))
   {
-    string fileName = url.substr(6);
+    string fileName = dir + url.substr(7);
+    cout << "Filename: " << fileName << '\n';
+    const string output = readFile(fileName);
+    if (output == "")
+    {
+      string response = sendString("404 Not Found", "");
+      return response;
+    }
     // Build the response
     Response resp;
     resp.contentType = "application/octet-stream";
-    resp.body = readFile(fileName);
-    cout << resp.body << '\n';
+    resp.body = output;
     string response = resp.toString();
+    cout << response;
     return response;
   }
   else
@@ -387,6 +397,11 @@ int main(int argc, char **argv)
 {
   Server server;
   // server.setMaxCharLength(int);
+  // https://github.com/varunarya002/codecrafters-http-server-cpp/blob/472d238d47d555645dc8d15081c45fbee8061006/src/server.cpp
+  if (argc == 3 && strcmp(argv[1], "--directory") == 0)
+  {
+    dir = argv[2];
+  }
   server.init();
   server.start(handleResponse);
   return 0;
