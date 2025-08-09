@@ -1,115 +1,298 @@
-#include "lib.h"
-#include "utils.h"
+
+// Standard library
 #include <iostream>
 #include <string>
 #include <cstring>
+#include <vector>
+#include <unordered_map>
+#include <utility>
+#include <thread>
+// ?
+#include <unistd.h>
+#include <sys/types.h>
+// Socket/linux networking
+#include <sys/socket.h>
+#include <arpa/inet.h>
+#include <netdb.h>
+// Internal libraries
+#include "utils.h"
+#include "lib.h"
 
 using namespace std;
 
-// Global variables
-string dir = "";
+using ResponseFunc = const string (*)(const HttpRequest &req);
 
-const string handleGETResponse(const HttpRequest &req)
+// Extract the path from a request (example: localhost:4221/test) -> returns test
+char *getURLPath(char *buffer, int n)
 {
-  if (req.url == "/")
-  {
-    const string body = "";
+  // Use a static char so it doesn't get deallocated when the function exits (even though the return type is pointer)
+  static char url[1024];
+  int index = 0;
+  bool isURL = false;
 
-    const string response = sendString("200 OK", "");
-    return response;
-  }
-  else if (req.url == "/user-agent")
+  for (int i = 0; i < n; i++)
   {
-    auto userAgent = req.headers.find("User-Agent");
-    if (userAgent != req.headers.end())
+    if (isURL && buffer[i] == ' ')
     {
-      const string response = sendString("200 OK", userAgent->second);
-      return response;
+      break;
+    }
+    else if (buffer[i] == ' ')
+    {
+      isURL = true;
+    }
+    else if (isURL == true)
+    {
+      url[index++] = buffer[i];
     }
   }
-  else if (startsWith(req.url, "/echo"))
-  {
-    // To prevent substring error (which would crash the server)
-    if (req.url.length() > 5)
-    {
-      const string body = req.url.substr(6);
-      const string response = sendString("200 OK", body);
-      return response;
-    }
-    else
-    {
-      const string response = "HTTP/1.1 404 Not Found\r\n\r\n";
-      return response;
-    }
-  }
-  else if (startsWith(req.url, "/files"))
-  {
-    string fileName = dir + req.url.substr(7);
-    cout << "Filename: " << fileName << '\n';
-    const string output = readFile(fileName);
-    if (output == "")
-    {
-      const string response = sendString("404 Not Found", "");
-      return response;
-    }
-    // Build the response
-    Response resp;
-    resp.contentType = "application/octet-stream";
-    resp.body = output;
-    string response = resp.toString();
-    return response;
-  }
-  // Else condition
-  return sendString("404 Not Found", "");
+
+  url[index] = '\0'; // Null-terminate the string, this signals the end of C style strings
+  return url;
 }
 
-const string handlePOSTResponse(const HttpRequest &req)
+bool Server::init()
 {
-  if (startsWith(req.url, "/files"))
+  // Flush after every cout / cerr
+  cout << unitbuf;
+  cerr << unitbuf;
+
+  // int socket(int domain, int type, int protocol);
+  // SOCK_DGRAM - Doesn't require connection to be established, no guarentee for delivery/order/error checking, fixed size. Suitable for zoom meetings, real-time applications, games.
+  // SOCK_STREAM - Provides reliable, sequenced packets and error checked packets. It is suitable for applications where data integrity and order are critical, such as HTTP, FTP, and SSH.
+  // SOCK_SEQPACKET - Same as SOCK_STREAM but tells you when messages start and end instead of just sending and sending data in one stream. (Maybe?)
+  server_fd = socket(AF_INET, SOCK_STREAM, 0);
+  if (server_fd < 0)
   {
-    string fileName = dir + req.url.substr(7);
-    cout << "Filename: " << fileName << '\n';
-    if (fileName == "")
-    {
-      const string response = sendString("404 Not Found", "");
-      return response;
-    }
-    cout << "Data: " << req.data << '\n';
-    writeToFile(fileName, req.data);
-    // Build the response
-    const string response = sendString("201 Created", "");
-    return response;
+    cerr << "Failed to create server socket\n";
+    return false;
   }
-  // Else condition
-  return sendString("404 Not Found", "");
+
+  // Since the tester restarts your program quite often, setting SO_REUSEADDR
+  // ensures that we don't run into 'Address already in use' errors
+  int reuse = 1;
+  if (setsockopt(server_fd, SOL_SOCKET, SO_REUSEADDR, &reuse, sizeof(reuse)) < 0)
+  {
+    cerr << "setsockopt failed\n";
+    return false;
+  }
+
+  struct sockaddr_in server_addr;
+  server_addr.sin_family = AF_INET;
+  server_addr.sin_addr.s_addr = INADDR_ANY;
+  server_addr.sin_port = htons(4221);
+
+  if (bind(server_fd, (struct sockaddr *)&server_addr, sizeof(server_addr)) != 0)
+  {
+    cerr << "Failed to bind to port 4221\n";
+    return false;
+  }
+
+  int connection_backlog = 5;
+  if (listen(server_fd, connection_backlog) != 0)
+  {
+    cerr << "listen failed\n";
+    return false;
+  }
+
+  return true;
+}
+bool Server::start(ResponseFunc callback)
+{
+  // This holds the IP address, port number, address type (IPV4/6)
+  struct sockaddr_in client_addr;
+  // This tells the accept function that the struct is x bytes. It doesn't change on new requests, this is just for the compiler to know
+  int client_addr_len = sizeof(client_addr);
+
+  cout << "Waiting for a client to connect...\n";
+
+  while (true)
+  {
+    int client_fd = accept(server_fd, (struct sockaddr *)&client_addr, (socklen_t *)&client_addr_len);
+    cout << "Client connected\n";
+    try
+    {
+      // Create a thread, to handle it and then just run it seperately so the program can continue accepting requests
+      thread(handleClient, client_fd, callback).detach();
+    }
+    catch (int err)
+    {
+      cout << "An error occured during processing. Error code: " << err << "\n";
+    }
+  }
+  close(server_fd);
+  return true;
 }
 
-const string middleware(const HttpRequest& req)
+// I saw an example on Codecrafters doing it this way and I have to say they did a good job
+void Server::handleClient(int client_fd, ResponseFunc handleResponse)
 {
-  if (req.method == "GET")
+  constexpr int maximumCharacters = 1024;
+  // Setup a buffer with any amount of characters for now...
+  char buffer[maximumCharacters];
+
+  // https://www.bogotobogo.com/cplusplus/sockets_server_client.php
+  // Reads the value from the client and returns the length of the response
+  int n = read(client_fd, buffer, maximumCharacters);
+  if (n < 0)
+    cout << ("ERROR reading from socket");
+  // printf("Here is the message: %s\n",buffer);
+  string bufferStr(buffer);
+  // Check if it exceeds the maximum character size (the read function cuts it off anyways so you can just use == to check)
+  if (bufferStr.length() == maximumCharacters)
   {
-    return handleGETResponse(req);
+    return;
   }
-  else if (req.method == "POST")
+
+  // Artificially add \n to ensure that all data is pushed to the map below
+  strcat(buffer, "\n");
+
+  string curr;
+  string httpMethod;
+  string url;
+  string protocol;
+  string data;
+  // Unfortunately it says that headers are NOT always in the same order, so we have to use a map for each header
+  // According to AI, you should use a unordered map...
+  unordered_map<string, string> headers;
+  vector<string> lines = {};
+  enum STATE
   {
-    return handlePOSTResponse(req);
+    TYPE,
+    URL,
+    PROTO,
+    FIRST,
+    SECOND,
+    DATA
+  };
+  enum STATE state = STATE::TYPE;
+  pair<string, string> headerData;
+  // Loop through each character in the char* array until the null byte
+  for (int i = 0; buffer[i] != '\0'; ++i)
+  {
+    char c = buffer[i];
+    if (state == STATE::TYPE)
+    {
+      if (c == ' ')
+      {
+        httpMethod = curr;
+        curr = "";
+        state = STATE::URL;
+      }
+      else
+      {
+        curr += c;
+      }
+    }
+    else if (state == STATE::URL)
+    {
+      if (c == ' ')
+      {
+        url = curr;
+        curr = "";
+        state = STATE::PROTO;
+      }
+      else
+      {
+        curr += c;
+      }
+    }
+    else if (state == STATE::PROTO)
+    {
+      if (c == '\r')
+      {
+        protocol = curr;
+        curr = "";
+        i++;
+        state = STATE::FIRST;
+      }
+      else
+      {
+        curr += c;
+      }
+    }
+    else if (state == STATE::FIRST)
+    {
+      if (c == '\r')
+      {
+        curr = "";
+        state = STATE::DATA;
+        i++;
+      }
+      else if (c == ':')
+      {
+        headerData.first = curr;
+        curr = "";
+        state = STATE::SECOND;
+        i++;
+      }
+      else
+      {
+        curr += c;
+      }
+    }
+    else if (state == STATE::SECOND)
+    {
+      if (c == '\r')
+      {
+        headerData.second = curr;
+        headers.insert(headerData);
+        curr = "";
+        state = STATE::FIRST;
+        i++;
+      }
+      else
+      {
+        curr += c;
+      }
+    }
+    else if (state == STATE::DATA)
+    {
+      // No need to check anything else since this will terminate after the request body is over
+      curr += c;
+    }
   }
-  // Else condition
-  const string response = sendString("404 Not Found", "");
+  data = curr;
+  // Since there will be a \n at the end of checking (O(1) time efficiency)
+  if (!data.empty())
+  {
+    data.pop_back();
+  }
+
+  writeToFile("output.txt", bufferStr);
+
+  cout << "INFO: Request to " << url << '\n';
+  cout << httpMethod << "\n" << protocol << "\n" << replaceAll(data, "\n", "\\n") << '\n';
+  for (const auto &pair : headers)
+  {
+    cout << "[" << pair.first << "] = [" << pair.second << "]\n";
+  }
+
+  HttpRequest req = {httpMethod, url, protocol, headers, data};
+  string response = handleResponse(req);
+
+  // send(sockfd, buf, len, flags);
+  // buf is the response
+  // len is in bytes
+  // flags is ???
+  send(client_fd, response.c_str(), response.length(), 0);
+}
+
+// Help of AI
+string Response::toString() const
+{
+  string response = "HTTP/1.1 " + status + "\r\n";
+  response += "Content-Type: " + contentType + "\r\n";
+  response += "Content-Length: " + to_string(body.length()) + "\r\n\r\n";
+  response += body;
   return response;
 }
 
-int main(int argc, char **argv)
+// Just for quick sending
+string sendString(const string &status, const string &body)
 {
-  Server server;
-  // server.setMaxCharLength(int);
-  // https://github.com/varunarya002/codecrafters-http-server-cpp/blob/472d238d47d555645dc8d15081c45fbee8061006/src/server.cpp
-  if (argc == 3 && strcmp(argv[1], "--directory") == 0)
-  {
-    dir = argv[2];
-  }
-  cout << "Assuming dir is " << (dir == "" ? "Empty" : dir) << '\n';
-  server.init();
-  server.start(middleware);
-  return 0;
+  string response = "HTTP/1.1 " + status + "\r\n";
+  response.append("Content-Type: text/plain\r\n");
+  response.append("Content-Length: " + to_string(body.length()) + "\r\n" + "\r\n");
+  response.append(body + "\r\n");
+  return response;
 }

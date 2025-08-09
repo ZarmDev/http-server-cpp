@@ -6,6 +6,8 @@ using namespace std;
 
 string readFile(const string &path);
 void writeToFile(const string &path, const string &data);
+string replaceAll(string str, const string& from, const string& to);
+
 // For efficient checking of the first x characters (generated using AI)
 // This is declared in the header file because C++ doesn't let you do it inline otherwise
 inline bool startsWith(const string &str, const string &prefix)
